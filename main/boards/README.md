@@ -264,6 +264,62 @@ DECLARE_BOARD(MyCustomBoard);
 
 在README.md中说明开发板的特性、硬件要求、编译和烧录步骤：
 
+### 5. 编译脚本中添加相关内容
+
+1. 在文件main\Kconfig.projbuild中添加开发板类型
+   文件中增加
+
+    ```bash
+    config BOARD_TYPE_GOOUUU_OLED
+        bool "果云小智扩展版（OLED）"
+        depends on IDF_TARGET_ESP32S3
+    ```
+
+    ```bash
+    choice BOARD_TYPE
+        prompt "Board Type"
+        default BOARD_TYPE_BREAD_COMPACT_WIFI
+        help
+            Board type. 开发板类型
+        config BOARD_TYPE_GOOUUU_OLED
+            bool "果云小智扩展版（OLED）"
+            depends on IDF_TARGET_ESP32S3
+        config BOARD_TYPE_BREAD_COMPACT_WIFI
+            bool "面包板新版接线（WiFi）"
+            depends on IDF_TARGET_ESP32S3
+        config BOARD_TYPE_BREAD_COMPACT_WIFI_LCD
+            bool "面包板新版接线（WiFi）+ LCD"
+            depends on IDF_TARGET_ESP32S3
+        .......#开发板类型列表
+    endchoice
+    ```
+
+2. 修改文件main\Kconfig.projbuild中对应的显示模式等需要跟随改动的地方，比如：
+   增加BOARD_TYPE_GOOUUU_OLED
+
+    ```cmake
+    choice DISPLAY_OLED_TYPE
+        depends on BOARD_TYPE_BREAD_COMPACT_WIFI || BOARD_TYPE_BREAD_COMPACT_ML307 || BOARD_TYPE_BREAD_COMPACT_ESP32 || BOARD_TYPE_GOOUUU_OLED
+        prompt "OLED Type"
+        default OLED_SSD1306_128X32
+        help
+            OLED 屏幕类型选择
+        config OLED_SSD1306_128X32
+            bool "SSD1306, 分辨率128*32"
+        config OLED_SSD1306_128X64
+            bool "SSD1306, 分辨率128*64"
+        config OLED_SH1106_128X64
+            bool "SH1106, 分辨率128*64"
+    endchoice
+    ```
+
+3. 修改文件main\CMakeLists.txt，添加新的板级文件，比如：
+
+    ```cmake
+    # 根据 BOARD_TYPE 配置添加对应的板级文件
+    elseif(CONFIG_BOARD_TYPE_GOOUUU_OLED)
+        set(BOARD_TYPE "goouuu-oled")
+    ```
 
 ## 常见开发板组件
 

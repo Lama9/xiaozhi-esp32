@@ -1,0 +1,79 @@
+# 果云 AI小智扩展板（OLED版）
+
+增加对果云AI小智扩展板 硬件V1.6版 的支持
+需要配合果云版小智AI ESP32-S3核心板 兼容DevKitC-N16R8 GoouuuESP32开发板
+支持了最新的音量加按钮，电池电量显示，电池充电状态显示，OLED显示屏显示。
+
+## 📋 功能特性
+
+- ✅ 语音识别与合成
+- ✅ WiFi连接配置
+- ✅ 电池电量监测
+- ✅ 充电状态显示
+- ✅ 音量控制按钮
+- ✅ OLED显示屏支持
+- ✅ 多语言支持
+
+产品链接：[ 小智AI ESP32-S3核心板 兼容DevKitC-N16R8 GoouuuESP32开发板 ] (<https://item.taobao.com/item.htm?id=659498263638>)
+
+## 🛠️ 硬件连接
+
+硬件基于果云ESP32-S3开发板+果云小智AI扩展板，代码基于bread-compact-wifi修改
+
+### 主要引脚连接
+
+| 功能 | GPIO引脚 | 说明 |
+|------|----------|------|
+| 电池电量ADC | GPIO11 | 电池电量检测 |
+| 充电状态CHGR | GPIO12 | 充电状态检测 |
+| 音量加按钮 | GPIO39 | 音量增加控制 |
+| 音量减按钮 | GPIO38 | 音量减少控制 |
+| OLED显示屏 | I2C接口 | SSD1306 128x32显示屏 |
+
+### 音频接口
+- I2S音频输入/输出接口
+- 支持麦克风和扬声器
+
+## 🛠️ 编译指南
+
+### 开发环境要求
+- ESP-IDF v5.4.1+
+- Python 3.8+
+- Git
+
+### 编译步骤
+
+**1. 配置编译目标为 ESP32S3：**
+
+```bash
+idf.py set-target esp32s3
+```
+
+**2. 打开 menuconfig：**
+
+```bash
+idf.py menuconfig
+```
+
+**3. 选择板子：**
+
+```
+Xiaozhi Assistant -> Board Type -> 果云小智扩展版（OLED）
+```
+
+**4. 选择屏幕：**
+
+```
+Xiaozhi Assistant -> OLED Type -> OLED_SSD1306_128X32
+```
+
+**5. 编译烧入：**
+
+```bash
+idf.py build flash
+```
+
+### 注意事项
+- 确保硬件连接正确
+- 首次使用需要配置WiFi网络
+- 支持OTA在线升级功能
