@@ -7,6 +7,8 @@
 #include "i2c_device.h"
 #include "led/single_led.h"
 #include "esp32_camera.h"
+#include "sensors/dht11_sensor.h"
+#include "mcp_server.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -51,6 +53,11 @@ private:
     LcdDisplay* display_;
     XL9555* xl9555_;
     Esp32Camera* camera_;
+    DHT11Sensor* dht11_sensor_;
+    DHT11Data last_dht11_data_;
+    uint64_t last_dht11_read_time_;
+    esp_timer_handle_t dht11_timer_;
+    bool dht11_timer_running_;        // DHT11定时器运行状态
 
     void InitializeI2c() {
         // Initialize I2C peripheral
@@ -187,13 +194,173 @@ private:
         
     }
 
+    /**
+     * @brief 初始化DHT11温湿度传感器
+     */
+    void InitializeDHT11() {
+        ESP_LOGI(TAG, "Initializing DHT11 sensor on GPIO %d", DHT11_DATA_PIN);
+        
+        dht11_sensor_ = new DHT11Sensor(DHT11_DATA_PIN, DHT11_MAX_RETRY_COUNT, DHT11_TIMEOUT_MS);
+        
+        if (!dht11_sensor_->Init()) {
+            ESP_LOGE(TAG, "Failed to initialize DHT11 sensor");
+            delete dht11_sensor_;
+            dht11_sensor_ = nullptr;
+            return;
+        }
+        
+        // 执行一次初始读取测试
+        last_dht11_data_ = dht11_sensor_->Read();
+        last_dht11_read_time_ = (uint64_t)esp_timer_get_time();
+        
+        if (last_dht11_data_.is_valid) {
+            ESP_LOGI(TAG, "DHT11 sensor test successful - Temp: %.1f°C, Humidity: %.1f%%", 
+                     last_dht11_data_.temperature, last_dht11_data_.humidity);
+        } else {
+            ESP_LOGW(TAG, "DHT11 sensor test failed, but continuing");
+        }
+    }
+    
+    /**
+     * @brief 读取DHT11传感器数据
+     * @note 只有在传感器启用时才会读取数据
+     */
+    void ReadDHT11Data() {
+        if (!dht11_sensor_) {
+            ESP_LOGW(TAG, "DHT11 sensor not initialized");
+            return;
+        }
+        
+        // 检查传感器是否启用
+        if (!dht11_sensor_->IsEnabled()) {
+            ESP_LOGD(TAG, "DHT11 sensor is disabled, skipping read");
+            return;
+        }
+        
+        uint64_t current_time = (uint64_t)esp_timer_get_time();
+        if (current_time - last_dht11_read_time_ < DHT11_READ_INTERVAL_MS * 1000) {
+            return; // 未到读取时间
+        }
+        
+        DHT11Data new_data = dht11_sensor_->Read();
+        if (new_data.is_valid) {
+            last_dht11_data_ = new_data;
+            last_dht11_read_time_ = current_time;
+            ESP_LOGI(TAG, "DHT11 read: Temperature=%.1f°C, Humidity=%.1f%%", 
+                     new_data.temperature, new_data.humidity);
+        } else {
+            ESP_LOGW(TAG, "DHT11 read failed, retry count: %d", new_data.retry_count);
+        }
+    }
+    
+    /**
+     * @brief 初始化MCP工具
+     */
+    void InitializeTools() {
+        auto& mcp_server = McpServer::GetInstance();
+        
+        // DHT11温度查询工具
+        mcp_server.AddTool("self.atk_dnesp32s3.get_temperature", 
+            "获取当前环境温度（基于ESP-IDF-Lib DHT驱动）", 
+            PropertyList(), 
+            [this](const PropertyList& properties) -> ReturnValue {
+                ReadDHT11Data(); // 更新最新数据
+                if (last_dht11_data_.is_valid) {
+                    return std::to_string(last_dht11_data_.temperature);
+                } else {
+                    return std::string("-999.0"); // 表示读取失败
+                }
+            });
+            
+        // DHT11湿度查询工具
+        mcp_server.AddTool("self.atk_dnesp32s3.get_humidity", 
+            "获取当前环境湿度（基于ESP-IDF-Lib DHT驱动）", 
+            PropertyList(), 
+            [this](const PropertyList& properties) -> ReturnValue {
+                ReadDHT11Data(); // 更新最新数据
+                if (last_dht11_data_.is_valid) {
+                    return std::to_string(last_dht11_data_.humidity);
+                } else {
+                    return std::string("-1.0"); // 表示读取失败
+                }
+            });
+            
+        // DHT11完整气象数据工具
+        mcp_server.AddTool("self.atk_dnesp32s3.get_weather_data", 
+            "获取当前环境温湿度数据（基于ESP-IDF-Lib DHT驱动）", 
+            PropertyList(), 
+            [this](const PropertyList& properties) -> ReturnValue {
+                ReadDHT11Data(); // 更新最新数据
+                if (dht11_sensor_) {
+                    return dht11_sensor_->GetStatusJson();
+                } else {
+                    return std::string("{\"driver\":\"esp-idf-lib\",\"error\":\"DHT11 sensor not initialized\"}");
+                }
+            });
+            
+        // DHT11传感器开关控制工具
+        mcp_server.AddTool("self.atk_dnesp32s3.enable_dht11", 
+            "启用DHT11温湿度传感器监测功能", 
+            PropertyList(), 
+            [this](const PropertyList& properties) -> ReturnValue {
+                if (!dht11_sensor_) {
+                    return std::string("DHT11传感器未初始化");
+                }
+                
+                if (dht11_sensor_->Enable()) {
+                    StartDHT11Timer();
+                    return std::string("DHT11温湿度监测功能已启用");
+                } else {
+                    return std::string("DHT11传感器启用失败，请检查硬件连接");
+                }
+            });
+            
+        // DHT11传感器关闭工具
+        mcp_server.AddTool("self.atk_dnesp32s3.disable_dht11", 
+            "禁用DHT11温湿度传感器监测功能", 
+            PropertyList(), 
+            [this](const PropertyList& properties) -> ReturnValue {
+                if (!dht11_sensor_) {
+                    return std::string("DHT11传感器未初始化");
+                }
+                
+                if (dht11_sensor_->Disable()) {
+                    StopDHT11Timer();
+                    return std::string("DHT11温湿度监测功能已禁用");
+                } else {
+                    return std::string("DHT11传感器禁用失败");
+                }
+            });
+            
+        // DHT11传感器状态查询工具
+        mcp_server.AddTool("self.atk_dnesp32s3.get_dht11_status", 
+            "查询DHT11温湿度传感器当前状态", 
+            PropertyList(), 
+            [this](const PropertyList& properties) -> ReturnValue {
+                if (!dht11_sensor_) {
+                    return std::string("{\"enabled\":false,\"timer_running\":false,\"error\":\"DHT11传感器未初始化\"}");
+                }
+                
+                char status_json[256];
+                snprintf(status_json, sizeof(status_json),
+                    "{\"enabled\":%s,\"timer_running\":%s,\"last_read_time\":%llu}",
+                    dht11_sensor_->IsEnabled() ? "true" : "false",
+                    dht11_timer_running_ ? "true" : "false",
+                    last_dht11_read_time_);
+                return std::string(status_json);
+            });
+    }
+
 public:
-    atk_dnesp32s3() : boot_button_(BOOT_BUTTON_GPIO) {
+    atk_dnesp32s3() : boot_button_(BOOT_BUTTON_GPIO), dht11_timer_running_(false) {
         InitializeI2c();
         InitializeSpi();
         InitializeSt7789Display();
+        InitializeDHT11();
         InitializeButtons();
+        InitializeTools();
         InitializeCamera();
+        // 注意：DHT11定时器默认不启动，需要用户语音开启
     }
 
     virtual Led* GetLed() override {
@@ -224,6 +391,63 @@ public:
     
     virtual Camera* GetCamera() override {
         return camera_;
+    }
+    
+    /**
+     * @brief 启动DHT11定期读取定时器
+     * @note 只有在传感器启用且定时器未运行时才启动
+     */
+    void StartDHT11Timer() {
+        if (dht11_timer_running_) {
+            ESP_LOGW(TAG, "DHT11 timer is already running");
+            return;
+        }
+        
+        if (!dht11_sensor_ || !dht11_sensor_->IsEnabled()) {
+            ESP_LOGW(TAG, "Cannot start DHT11 timer: sensor not enabled");
+            return;
+        }
+        
+        // 创建定时器（如果尚未创建）
+        if (!dht11_timer_) {
+            esp_timer_create_args_t timer_args = {
+                .callback = [](void* arg) {
+                    auto self = static_cast<atk_dnesp32s3*>(arg);
+                    self->ReadDHT11Data();
+                },
+                .arg = this,
+                .dispatch_method = ESP_TIMER_TASK,
+                .name = "dht11_timer",
+                .skip_unhandled_events = false,
+            };
+            ESP_ERROR_CHECK(esp_timer_create(&timer_args, &dht11_timer_));
+        }
+        
+        // 启动定时器
+        ESP_ERROR_CHECK(esp_timer_start_periodic(dht11_timer_, DHT11_READ_INTERVAL_MS * 1000));
+        dht11_timer_running_ = true;
+        ESP_LOGI(TAG, "DHT11 periodic reading timer started");
+    }
+    
+    /**
+     * @brief 停止DHT11定期读取定时器
+     * @note 彻底停止定时器并清理资源
+     */
+    void StopDHT11Timer() {
+        if (!dht11_timer_running_) {
+            ESP_LOGW(TAG, "DHT11 timer is not running");
+            return;
+        }
+        
+        // 停止定时器
+        if (dht11_timer_) {
+            ESP_ERROR_CHECK(esp_timer_stop(dht11_timer_));
+            ESP_ERROR_CHECK(esp_timer_delete(dht11_timer_));
+            dht11_timer_ = nullptr;
+        }
+        
+        dht11_timer_running_ = false;
+        ESP_LOGI(TAG, "DHT11 periodic reading timer stopped and cleaned up");
     }
 };
 

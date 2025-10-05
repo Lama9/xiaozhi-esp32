@@ -638,10 +638,17 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     auto now = std::chrono::steady_clock::now();
     auto input_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();
     auto output_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_output_time_).count();
-    if (input_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->input_enabled()) {
+    
+    // 检查是否有音频任务正在运行，如果有则不关闭音频
+    bool has_audio_activity = (xEventGroupGetBits(event_group_) & 
+                              (AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING)) != 0;
+    
+    if (input_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->input_enabled() && !has_audio_activity) {
+        ESP_LOGI(TAG, "Disabling audio input due to inactivity (%ld ms)", input_elapsed);
         codec_->EnableInput(false);
     }
-    if (output_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->output_enabled()) {
+    if (output_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->output_enabled() && !has_audio_activity) {
+        ESP_LOGI(TAG, "Disabling audio output due to inactivity (%ld ms)", output_elapsed);
         codec_->EnableOutput(false);
     }
     if (!codec_->input_enabled() && !codec_->output_enabled()) {

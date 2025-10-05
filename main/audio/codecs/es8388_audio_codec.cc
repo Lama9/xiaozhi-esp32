@@ -143,6 +143,9 @@ void Es8388AudioCodec::EnableInput(bool enable) {
         return;
     }
     if (enable) {
+        // I2S通道已在AudioCodec::Start()中启用，这里不需要重复启用
+        ESP_LOGI(TAG, "Enabling ES8388 input (I2S RX channel already enabled)");
+        
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
             .channel = (uint8_t) input_channels_,
@@ -160,8 +163,10 @@ void Es8388AudioCodec::EnableInput(bool enable) {
         }else{
             ESP_ERROR_CHECK(esp_codec_dev_set_in_gain(input_dev_, 24.0));
         }
+        ESP_LOGI(TAG, "ES8388 input enabled");
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
+        ESP_LOGI(TAG, "ES8388 input disabled");
     }
     AudioCodec::EnableInput(enable);
 }
@@ -172,6 +177,9 @@ void Es8388AudioCodec::EnableOutput(bool enable) {
         return;
     }
     if (enable) {
+        // I2S通道已在AudioCodec::Start()中启用，这里不需要重复启用
+        ESP_LOGI(TAG, "Enabling ES8388 output (I2S TX channel already enabled)");
+        
         esp_codec_dev_sample_info_t fs = {
             .bits_per_sample = 16,
             .channel = 1,
@@ -195,11 +203,13 @@ void Es8388AudioCodec::EnableOutput(bool enable) {
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 1);
         }
+        ESP_LOGI(TAG, "ES8388 output enabled");
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
         if (pa_pin_ != GPIO_NUM_NC) {
             gpio_set_level(pa_pin_, 0);
         }
+        ESP_LOGI(TAG, "ES8388 output disabled");
     }
     AudioCodec::EnableOutput(enable);
 }

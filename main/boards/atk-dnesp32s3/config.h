@@ -60,5 +60,11 @@
 #define OV_PWDN_IO      4
 #define OV_RESET_IO     5
 
+/* DHT11温湿度传感器配置 */
+#define DHT11_DATA_PIN  GPIO_NUM_2          // DHT11数据引脚连接到ESP32-S3 GPIO2
+#define DHT11_READ_INTERVAL_MS 5000         // 5秒读取一次温湿度
+#define DHT11_MAX_RETRY_COUNT 3             // 最大重试次数
+#define DHT11_TIMEOUT_MS 2000               // 超时时间(毫秒)
+
 #endif // _BOARD_CONFIG_H_
 
