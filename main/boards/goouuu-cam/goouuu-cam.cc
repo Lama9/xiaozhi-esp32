@@ -11,6 +11,8 @@
 #include "led/single_led.h"
 #include "esp32_camera.h"
 #include <wifi_station.h>
+#include <esp_video_init.h>
+#include <esp_cam_ctlr.h>
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
@@ -92,36 +94,48 @@ private:
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
     void InitializeCamera() {
-        camera_config_t config = {};
-        config.ledc_channel = LEDC_CHANNEL_2;   // LEDC通道选择  用于生成XCLK时钟 但是S3不用
-        config.ledc_timer = LEDC_TIMER_2;       // LEDC timer选择  用于生成XCLK时钟 但是S3不用
-        config.pin_d0 = CAMERA_PIN_D0;
-        config.pin_d1 = CAMERA_PIN_D1;
-        config.pin_d2 = CAMERA_PIN_D2;
-        config.pin_d3 = CAMERA_PIN_D3;
-        config.pin_d4 = CAMERA_PIN_D4;
-        config.pin_d5 = CAMERA_PIN_D5;
-        config.pin_d6 = CAMERA_PIN_D6;
-        config.pin_d7 = CAMERA_PIN_D7;
-        config.pin_xclk = CAMERA_PIN_XCLK;
-        config.pin_pclk = CAMERA_PIN_PCLK;
-        config.pin_vsync = CAMERA_PIN_VSYNC;
-        config.pin_href = CAMERA_PIN_HREF;
-        config.pin_sccb_sda = CAMERA_PIN_SIOD;  // 这里如果写-1 表示使用已经初始化的I2C接口
-        config.pin_sccb_scl = CAMERA_PIN_SIOC;
-        config.sccb_i2c_port = 1;               //  这里如果写1 默认使用I2C1
-        config.pin_pwdn = CAMERA_PIN_PWDN;
-        config.pin_reset = CAMERA_PIN_RESET;
-        config.xclk_freq_hz = XCLK_FREQ_HZ;
-        config.pixel_format = PIXFORMAT_RGB565;
-        config.frame_size = FRAMESIZE_VGA;
-        config.jpeg_quality = 12;
-        config.fb_count = 1;
-        config.fb_location = CAMERA_FB_IN_PSRAM;
-        config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+        static esp_cam_ctlr_dvp_pin_config_t dvp_pin_config = {
+            .data_width = CAM_CTLR_DATA_WIDTH_8,
+            .data_io = {
+                [0] = CAMERA_PIN_D0,
+                [1] = CAMERA_PIN_D1,
+                [2] = CAMERA_PIN_D2,
+                [3] = CAMERA_PIN_D3,
+                [4] = CAMERA_PIN_D4,
+                [5] = CAMERA_PIN_D5,
+                [6] = CAMERA_PIN_D6,
+                [7] = CAMERA_PIN_D7,
+            },
+            .vsync_io = CAMERA_PIN_VSYNC,
+            .de_io = CAMERA_PIN_HREF,
+            .pclk_io = CAMERA_PIN_PCLK,
+            .xclk_io = CAMERA_PIN_XCLK,
+        };
 
-        camera_ = new Esp32Camera(config);
-        camera_->SetVFlip(0);
+        esp_video_init_sccb_config_t sccb_config = {
+            .init_sccb = true,
+            .i2c_config = {
+                .port = I2C_NUM_0,
+                .scl_pin = CAMERA_PIN_SIOC,
+                .sda_pin = CAMERA_PIN_SIOD,
+            },
+            .freq = 100000,
+        };
+
+        esp_video_init_dvp_config_t dvp_config = {
+            .sccb_config = sccb_config,
+            .reset_pin = CAMERA_PIN_RESET,
+            .pwdn_pin = CAMERA_PIN_PWDN,
+            .dvp_pin = dvp_pin_config,
+            .xclk_freq = XCLK_FREQ_HZ,
+        };
+
+        esp_video_init_config_t video_config = {
+            .dvp = &dvp_config,
+        };
+
+        camera_ = new Esp32Camera(video_config);
+        camera_->SetHMirror(false);
     }
     void InitializePowerManager() {
         power_manager_ = new PowerManager(GPIO_NUM_19);
@@ -233,9 +247,66 @@ private:
         static LampController lamp(LAMP_GPIO);
 
         auto& mcp_server = McpServer::GetInstance();
+        
         // 定义设备的属性
         mcp_server.AddTool("self.goouuu.get_software_version", "获取设备当前软件版本", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             return GetSoftwareVersion();
+        });
+        
+        // === 电池状态查询工具 ===
+        // 获取电池电量百分比
+        mcp_server.AddTool("self.goouuu.get_battery_level", "获取设备自身电池电量百分比，当前电池电量。", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            uint8_t level = power_manager_->GetBatteryLevel();
+            return std::to_string(level) + "%";
+        });
+        
+        // 获取电池电压
+        mcp_server.AddTool("self.goouuu.get_battery_voltage", "获取设备自身电池电压", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            float voltage = power_manager_->GetBatteryVoltage();
+            char voltage_str[32];
+            snprintf(voltage_str, sizeof(voltage_str), "%.3fV", voltage);
+            return std::string(voltage_str);
+        });
+        
+        // 获取原始ADC值
+        mcp_server.AddTool("self.goouuu.get_battery_adc", "获取设备自身电池ADC原始值", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            uint32_t adc_value = power_manager_->GetRawAdcValue();
+            return std::to_string(adc_value);
+        });
+        
+        // 获取充电状态
+        mcp_server.AddTool("self.goouuu.get_charging_status", "获取充电状态", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            bool is_charging = power_manager_->IsCharging();
+            return is_charging ? "正在充电" : "未充电";
+        });
+        
+        // 获取放电状态
+        mcp_server.AddTool("self.goouuu.get_discharging_status", "获取放电状态", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            bool is_discharging = power_manager_->IsDischarging();
+            return is_discharging ? "正在放电" : "未放电";
+        });
+        
+        // 获取完整电池状态信息
+        mcp_server.AddTool("self.goouuu.get_battery_status", "获取完整的设备自身电池状态信息", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            uint8_t level = power_manager_->GetBatteryLevel();
+            float voltage = power_manager_->GetBatteryVoltage();
+            uint32_t adc_value = power_manager_->GetRawAdcValue();
+            bool is_charging = power_manager_->IsCharging();
+            bool is_discharging = power_manager_->IsDischarging();
+            
+            char status_str[256];
+            snprintf(status_str, sizeof(status_str), 
+                "电池状态信息:\n"
+                "电量: %d%%\n"
+                "电压: %.3fV\n"
+                "ADC值: %lu\n"
+                "充电状态: %s\n"
+                "放电状态: %s",
+                level, voltage, adc_value,
+                is_charging ? "充电中" : "未充电",
+                is_discharging ? "放电中" : "未放电"
+            );
+            return std::string(status_str);
         });
     }
 
