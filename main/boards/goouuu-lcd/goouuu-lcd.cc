@@ -152,9 +152,66 @@ private:
         static LampController lamp(LAMP_GPIO);
 
         auto& mcp_server = McpServer::GetInstance();
+        
         // 定义设备的属性
         mcp_server.AddTool("self.goouuu.get_software_version", "获取设备当前软件版本", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             return GetSoftwareVersion();
+        });
+        
+        // === 电池状态查询工具 ===
+        // 获取电池电量百分比
+        mcp_server.AddTool("self.goouuu.get_battery_level", "获取设备自身电池电量百分比，当前电池电量。", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            uint8_t level = power_manager_->GetBatteryLevel();
+            return std::to_string(level) + "%";
+        });
+        
+        // 获取电池电压
+        mcp_server.AddTool("self.goouuu.get_battery_voltage", "获取设备自身电池电压", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            float voltage = power_manager_->GetBatteryVoltage();
+            char voltage_str[32];
+            snprintf(voltage_str, sizeof(voltage_str), "%.3fV", voltage);
+            return std::string(voltage_str);
+        });
+        
+        // 获取原始ADC值
+        mcp_server.AddTool("self.goouuu.get_battery_adc", "获取设备自身电池ADC原始值", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            uint32_t adc_value = power_manager_->GetRawAdcValue();
+            return std::to_string(adc_value);
+        });
+        
+        // 获取充电状态
+        mcp_server.AddTool("self.goouuu.get_charging_status", "获取充电状态", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            bool is_charging = power_manager_->IsCharging();
+            return is_charging ? "正在充电" : "未充电";
+        });
+        
+        // 获取放电状态
+        mcp_server.AddTool("self.goouuu.get_discharging_status", "获取放电状态", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            bool is_discharging = power_manager_->IsDischarging();
+            return is_discharging ? "正在放电" : "未放电";
+        });
+        
+        // 获取完整电池状态信息
+        mcp_server.AddTool("self.goouuu.get_battery_status", "获取完整的设备自身电池状态信息", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            uint8_t level = power_manager_->GetBatteryLevel();
+            float voltage = power_manager_->GetBatteryVoltage();
+            uint32_t adc_value = power_manager_->GetRawAdcValue();
+            bool is_charging = power_manager_->IsCharging();
+            bool is_discharging = power_manager_->IsDischarging();
+            
+            char status_str[256];
+            snprintf(status_str, sizeof(status_str), 
+                "电池状态信息:\n"
+                "电量: %d%%\n"
+                "电压: %.3fV\n"
+                "ADC值: %lu\n"
+                "充电状态: %s\n"
+                "放电状态: %s",
+                level, voltage, adc_value,
+                is_charging ? "充电中" : "未充电",
+                is_discharging ? "放电中" : "未放电"
+            );
+            return std::string(status_str);
         });
     }
 
