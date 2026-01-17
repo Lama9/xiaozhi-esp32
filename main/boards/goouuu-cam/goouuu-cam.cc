@@ -153,16 +153,18 @@ private:
         rtc_gpio_set_direction(GPIO_NUM_48, RTC_GPIO_MODE_OUTPUT_ONLY);
         rtc_gpio_set_level(GPIO_NUM_48, 1);
 
-        power_save_timer_ = new PowerSaveTimer(-1, 60, 36000);
+        power_save_timer_ = new PowerSaveTimer(-1, 60, 3600);
         power_save_timer_->OnEnterSleepMode([this]() {
             ESP_LOGI(TAG, "Enabling sleep mode");
             display_->SetChatMessage("system", "");
             display_->SetEmotion("sleepy");
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
             display_->SetChatMessage("system", "");
             display_->SetEmotion("neutral");
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
@@ -172,6 +174,7 @@ private:
             rtc_gpio_hold_en(GPIO_NUM_48);
             esp_lcd_panel_disp_on_off(panel_, false); //关闭显示
             esp_deep_sleep_start();
+            // pmic_->PowerOff();
         });
         power_save_timer_->SetEnabled(true);
     }
@@ -227,8 +230,9 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                ResetWifiConfiguration();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
+                EnterWifiConfigMode();
+                return;
             }
             app.ToggleChatState();
         });
@@ -308,6 +312,17 @@ private:
             );
             return std::string(status_str);
         });
+
+        // 设置 UDP 日志开关
+        mcp_server.AddTool("self.goouuu.set_udp_log_enabled", "开启或关闭 UDP 日志广播", 
+            PropertyList({
+                Property("enabled", kPropertyTypeBoolean)
+            }), 
+            [this](const PropertyList& properties) -> ReturnValue {
+            bool enabled = properties["enabled"].value<bool>();
+            power_manager_->SetUdpLogEnabled(enabled);
+            return enabled ? "UDP日志已开启" : "UDP日志已关闭";
+        });
     }
 
 public:
@@ -368,12 +383,12 @@ public:
         return true;
     }
 
-    virtual void SetPowerSaveMode(bool enabled) override {
-        if (!enabled) {
-            power_save_timer_->WakeUp();
-        }
-        WifiBoard::SetPowerSaveMode(enabled);
-    }
+    // virtual void SetPowerSaveMode(bool enabled) override {
+    //     if (!enabled) {
+    //         power_save_timer_->WakeUp();
+    //     }
+    //     WifiBoard::SetPowerSaveMode(enabled);
+    // }
 };
 
 DECLARE_BOARD(GoouuuCam);

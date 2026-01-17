@@ -29,6 +29,12 @@
 #include <esp_adc/adc_oneshot.h>
 #include <driver/adc.h>
 
+
+#include <lwip/sockets.h>
+#include <lwip/sys.h>
+#include <lwip/netdb.h>
+#include <cstdarg>
+
 /**
  * @class PowerManager
  * @brief 电池管理系统核心类
@@ -39,6 +45,7 @@
  * - 电池电量百分比计算
  * - 低电量警告
  * - 状态变化回调通知
+ * - [新增] UDP日志广播 (端口12345)
  */
 class PowerManager {
 private:
@@ -46,6 +53,14 @@ private:
     esp_timer_handle_t timer_handle_;                                    ///< 电池检测定时器句柄
     std::function<void(bool)> on_charging_status_changed_;              ///< 充电状态变化回调
     std::function<void(bool)> on_low_battery_status_changed_;            ///< 低电量状态变化回调
+
+    // === UDP 日志相关 ===
+    bool udp_log_enabled_ = false;  ///< UDP日志开关，默认关闭
+    int udp_socket_ = -1;
+    struct sockaddr_in broadcast_addr_;
+    struct sockaddr_in fixed_addr_;
+    const int kUdpPort = 12345;
+    const char* kFixedIp = "192.168.11.66";
 
     // === 硬件引脚配置 ===
     /// @brief 充电状态检测引脚 (TP4054的CHGR引脚)
@@ -74,6 +89,81 @@ private:
     // === 调试相关 ===
     int debug_counter_ = 0;                                             ///< 调试计数器
     const int kDebugInterval = 10;                                     ///< 详细调试信息输出间隔
+
+    /**
+     * @brief 发送UDP日志
+     * 同时发送到广播地址和固定IP地址
+     */
+
+
+    /**
+     * @brief 确保UDP Socket已初始化
+     * 
+     * @return true 初始化成功或已初始化
+     * @return false 初始化失败
+     */
+    bool EnsureSocketInitialized() {
+        if (udp_socket_ >= 0) {
+            return true;
+        }
+
+        // 尝试创建Socket
+        udp_socket_ = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+        if (udp_socket_ < 0) {
+            return false;
+        }
+
+        // 启用广播
+        int broadcast = 1;
+        setsockopt(udp_socket_, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+        
+        // 设置非阻塞模式
+        int flags = fcntl(udp_socket_, F_GETFL, 0);
+        fcntl(udp_socket_, F_SETFL, flags | O_NONBLOCK);
+
+        // 配置广播地址
+        memset(&broadcast_addr_, 0, sizeof(broadcast_addr_));
+        broadcast_addr_.sin_family = AF_INET;
+        broadcast_addr_.sin_port = htons(kUdpPort);
+        broadcast_addr_.sin_addr.s_addr = inet_addr("255.255.255.255");
+
+        // 配置固定IP地址
+        memset(&fixed_addr_, 0, sizeof(fixed_addr_));
+        fixed_addr_.sin_family = AF_INET;
+        fixed_addr_.sin_port = htons(kUdpPort);
+        fixed_addr_.sin_addr.s_addr = inet_addr(kFixedIp);
+
+        return true;
+    }
+
+    /**
+     * @brief 发送UDP日志
+     * 同时发送到广播地址和固定IP地址
+     */
+    void SendUdpLog(const char* format, ...) {
+        // 如果开关关闭，直接返回
+        if (!udp_log_enabled_) {
+            return;
+        }
+
+        // 尝试初始化Socket，如果失败(例如WiFi未连接)则直接返回
+        if (!EnsureSocketInitialized()) {
+            return;
+        }
+
+        char buffer[256];
+        va_list args;
+        va_start(args, format);
+        int len = vsnprintf(buffer, sizeof(buffer), format, args);
+        va_end(args);
+
+        if (len > 0) {
+            // 发送到广播地址
+            sendto(udp_socket_, buffer, len, 0, (struct sockaddr *)&broadcast_addr_, sizeof(broadcast_addr_));
+            // 发送到固定IP地址
+            sendto(udp_socket_, buffer, len, 0, (struct sockaddr *)&fixed_addr_, sizeof(fixed_addr_));
+        }
+    }
 
     /**
      * @brief 检查电池状态 (定时器回调函数)
@@ -132,10 +222,38 @@ private:
      * - ADC精度：12位 (0-4095)
      */
     void ReadBatteryAdcData() {
-        int adc_value;
+        int adc_value = 0;
         // 读取ADC原始值 - GPIO20对应ADC2_CH9
-        ESP_ERROR_CHECK(adc_oneshot_read(adc_handle_, power_adc_channel_, &adc_value));
+        // 注意：使用ADC2时可能与WiFi冲突，需要处理读取失败的情况
+        esp_err_t ret = adc_oneshot_read(adc_handle_, power_adc_channel_, &adc_value);
         
+        // 如果读取失败，或者读数为0（异常），则忽略本次读取
+        if (ret != ESP_OK || adc_value <= 0) {
+            ESP_LOGW("PowerManager", "ADC读取失败或无效: ret=%d, val=%d", ret, adc_value);
+            return;
+        }
+        
+        // === 电池状态异常检测 ===
+        // 计算当前电压（基于之前校准的分压比 0.758 和 ADC 逻辑）
+        // ADC值 1240 约对应 1.0V (1240 * 3.3 / 4095)
+        // 电池电压 2.0V 约对应 ADC值 (2.0 * 0.758 / 3.3 * 4095) = 1880
+        // 如果 ADC 值极低 (例如 < 2000, 约 2.1V)，说明电池可能已物理断开(开关关闭)或未接电池
+        // 此时系统由 USB 供电，应避免误报"低电量"
+        if (adc_value < 2000) {
+            // 调试输出降低频率，避免刷屏
+            if (debug_counter_ % kDebugInterval == 0) {
+                 ESP_LOGI("PowerManager", "检测到无电池或开关关闭 (ADC=%d)，强制显示100%%电量", adc_value);
+            }
+            battery_level_ = 100;
+            is_low_battery_ = false;
+            
+            // 仍然可以发送 UDP 日志告知此状态
+            if (debug_counter_ % kDebugInterval == 0) {
+                 SendUdpLog("[UDP] No Battery/Switch Off (ADC=%d). Set 100%%.\n", adc_value);
+            }
+            return;
+        }
+
         // === 滑动平均滤波 ===
         // 维护固定大小的滑动窗口，提高ADC读取稳定性
         adc_values_.push_back(adc_value);
@@ -229,15 +347,46 @@ private:
             ESP_LOGI("PowerManager", "低电量状态: %s", is_low_battery_ ? "是" : "否");
             ESP_LOGI("PowerManager", "GPIO19电平: %d", gpio_get_level(charging_pin_));
             ESP_LOGI("PowerManager", "========================");
+
+            // UDP 发送详细日志
+            SendUdpLog("\n=== [UDP] 电池信息 ===\n"
+                       "原始ADC: %d, 平均ADC: %ld\n"
+                       "ADC电压: %.3fV, 电池电压: %.3fV\n"
+                       "电量: %ld%%, 充电: %s, GPIO19: %d\n"
+                       "======================\n",
+                       adc_value, average_adc, adc_voltage, battery_voltage,
+                       battery_level_, is_charging_ ? "Yes" : "No", gpio_get_level(charging_pin_));
         } else {
             // 普通日志输出 (每次检查都输出)
             ESP_LOGI("PowerManager", "ADC: %d, 平均: %ld, 电压: %.3fV, 电量: %ld%%, 充电: %s", 
                      adc_value, average_adc, battery_voltage, battery_level_, 
                      is_charging_ ? "是" : "否");
+            
+            // UDP 发送简略日志
+            SendUdpLog("[UDP] ADC: %d, Avg: %ld, Bat: %.3fV, Lvl: %ld%%, Chg: %s\n",
+                       adc_value, average_adc, battery_voltage, battery_level_, 
+                       is_charging_ ? "Y" : "N");
         }
     }
 
 public:
+
+    /**
+     * @brief 设置是否开启 UDP 日志
+     * 
+     * @param enabled true: 开启; false: 关闭
+     */
+    void SetUdpLogEnabled(bool enabled) {
+        if (!enabled) {
+            SendUdpLog("[UDP] UDP Log Disabled via MCP\n");
+        }
+        udp_log_enabled_ = enabled;
+        // 如果开启，可以立即尝试初始化Socket (可选，也可以等到通过SendUdpLog触发)
+        if (enabled) {
+            EnsureSocketInitialized();
+            SendUdpLog("[UDP] UDP Log Enabled via MCP\n");
+        }
+    }
 
     /**
      * @brief 电源电池管理模块构造函数
@@ -266,8 +415,13 @@ public:
         io_conf.mode = GPIO_MODE_INPUT;               // 输入模式
         io_conf.pin_bit_mask = (1ULL << charging_pin_);  // 设置引脚位掩码
         io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE; // 禁用下拉
-        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;     // 禁用上拉
+        io_conf.pull_up_en = GPIO_PULLUP_ENABLE;      // 启用上拉 (修复悬空导致的电平跳变)
         gpio_config(&io_conf);
+
+        // === UDP Socket初始化 ===
+        // 这里的初始化已经迁移到 SendUdpLog 的 EnsureSocketInitialized 中
+        // 以避免在 LwIP 协议栈未就绪时崩溃
+        udp_socket_ = -1;
 
         // === 定时器配置 ===
         // 创建电池检测定时器，每1秒执行一次CheckBatteryStatus
@@ -309,7 +463,11 @@ public:
         if (adc_handle_) {
             adc_oneshot_del_unit(adc_handle_);
         }
+        if (udp_socket_ >= 0) {
+            close(udp_socket_);
+        }
     }
+
 
     /**
      * @brief 获取充电状态
