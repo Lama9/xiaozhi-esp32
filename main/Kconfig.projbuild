@@ -122,15 +122,17 @@ choice BOARD_TYPE
     default BOARD_TYPE_BREAD_COMPACT_WIFI
     help
         Board type. 开发板类型
+    # === Goouuu 系列 (本地自定义，不同步上游) ===
     config BOARD_TYPE_GOOUUU_OLED
         bool "果云小智扩展版(OLED)"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_GOOUUU_LCD
         bool "果云小智扩展版(LCD)"
-        depends on IDF_TARGET_ESP32S3  
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_GOOUUU_CAM
         bool "果云小智扩展版(Camera)"
-        depends on IDF_TARGET_ESP32S3  
+        depends on IDF_TARGET_ESP32S3
+    # === 以上为 Goouuu 自定义板子 ===
     config BOARD_TYPE_BREAD_COMPACT_WIFI
         bool "Bread Compact WiFi (面包板)"
         depends on IDF_TARGET_ESP32S3
@@ -142,6 +144,9 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32S3     
     config BOARD_TYPE_BREAD_COMPACT_ML307
         bool "Bread Compact ML307/EC801E (面包板 4G)"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_BREAD_COMPACT_NT26
+        bool "Bread Compact NT26 (面包板 4G)"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_BREAD_COMPACT_ESP32
         bool "Bread Compact ESP32 DevKit (面包板)"
@@ -505,8 +510,11 @@ choice ESP_S3_LCD_EV_Board_Version_TYPE
         bool "乐鑫ESP32_S3_LCD_EV_Board-MB_V1.5"
 endchoice
 
+# Goouuu 开发板配置 (独立文件，减少上游合并冲突)
+rsource "boards/goouuu-common/Kconfig"
+
 choice DISPLAY_OLED_TYPE
-    depends on BOARD_TYPE_BREAD_COMPACT_WIFI || BOARD_TYPE_BREAD_COMPACT_ML307 || BOARD_TYPE_BREAD_COMPACT_ESP32 || BOARD_TYPE_HU_087 || BOARD_TYPE_GOOUUU_OLED
+    depends on BOARD_TYPE_BREAD_COMPACT_WIFI || BOARD_TYPE_BREAD_COMPACT_ML307 || BOARD_TYPE_BREAD_COMPACT_NT26 || BOARD_TYPE_BREAD_COMPACT_ESP32 || BOARD_TYPE_HU_087
     prompt "OLED Type"
     default OLED_SSD1306_128X32
     help
@@ -520,7 +528,7 @@ choice DISPLAY_OLED_TYPE
 endchoice
 
 choice DISPLAY_LCD_TYPE
-    depends on BOARD_TYPE_BREAD_COMPACT_WIFI_LCD || BOARD_TYPE_BREAD_COMPACT_ESP32_LCD || BOARD_TYPE_CGC || BOARD_TYPE_WAVESHARE_P4_NANO || BOARD_TYPE_WAVESHARE_P4_WIFI6_TOUCH_LCD_XC || BOARD_TYPE_BREAD_COMPACT_WIFI_CAM || BOARD_TYPE_GOOUUU_CAM || BOARD_TYPE_GOOUUU_LCD
+    depends on BOARD_TYPE_BREAD_COMPACT_WIFI_LCD || BOARD_TYPE_BREAD_COMPACT_ESP32_LCD || BOARD_TYPE_CGC || BOARD_TYPE_WAVESHARE_P4_NANO || BOARD_TYPE_WAVESHARE_P4_WIFI6_TOUCH_LCD_XC || BOARD_TYPE_BREAD_COMPACT_WIFI_CAM
     prompt "LCD Type"
     default LCD_ST7789_240X320
     help
