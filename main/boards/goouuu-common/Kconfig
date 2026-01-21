@@ -1,0 +1,40 @@
+# Goouuu 系列开发板 Kconfig 配置
+# 此文件独立于主 Kconfig.projbuild，减少上游合并时的冲突
+#
+# 注意：板子类型 (BOARD_TYPE_GOOUUU_*) 必须定义在 Kconfig.projbuild 的
+#       choice BOARD_TYPE 块内，无法通过 rsource 合并。
+#       此文件仅包含显示选项。
+
+# ===============================================
+# Goouuu OLED 显示类型
+# ===============================================
+choice DISPLAY_OLED_TYPE_GOOUUU
+    depends on BOARD_TYPE_GOOUUU_OLED
+    prompt "OLED Type (Goouuu)"
+    default GOOUUU_OLED_SSD1306_128X32
+    help
+        OLED Monochrome Display Type for Goouuu OLED board
+    config GOOUUU_OLED_SSD1306_128X32
+        bool "SSD1306 128*32"
+    config GOOUUU_OLED_SSD1306_128X64
+        bool "SSD1306 128*64"
+    config GOOUUU_OLED_SH1106_128X64
+        bool "SH1106 128*64"
+endchoice
+
+# ===============================================
+# Goouuu LCD 显示类型
+# ===============================================
+choice DISPLAY_LCD_TYPE_GOOUUU
+    depends on BOARD_TYPE_GOOUUU_CAM || BOARD_TYPE_GOOUUU_LCD
+    prompt "LCD Type (Goouuu)"
+    default GOOUUU_LCD_ST7789_240X320
+    help
+        LCD Display Type for Goouuu LCD/CAM boards
+    config GOOUUU_LCD_ST7789_240X320
+        bool "ST7789 240*320, IPS"
+    config GOOUUU_LCD_ST7789_240X320_NO_IPS
+        bool "ST7789 240*320, Non-IPS"
+    config GOOUUU_LCD_ST7789_240X240
+        bool "ST7789 240*240"
+endchoice
