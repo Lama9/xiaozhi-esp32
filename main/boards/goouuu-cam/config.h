@@ -301,7 +301,7 @@
 #endif
 
 
-// A MCP Test: Control a lamp
-#define LAMP_GPIO GPIO_NUM_46
+// Button 2 for Camera Capture
+#define CAPTURE_BUTTON_GPIO GPIO_NUM_46
 
 #endif // _BOARD_CONFIG_H_

@@ -5,11 +5,13 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include <cJSON.h>
 #include "mcp_server.h"
-#include "lamp_controller.h"
- 
+#include "display/lvgl_display/lvgl_theme.h"
+// #include "lamp_controller.h" // Removed since we use GPIO46 for capture
+
 #include "led/single_led.h"
-#include "esp32_camera.h"
+#include "esp_video.h"
 #include <wifi_station.h>
 #include <esp_video_init.h>
 #include <esp_cam_ctlr.h>
@@ -73,16 +75,205 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
 LV_FONT_DECLARE(font_puhui_16_4);
 LV_FONT_DECLARE(font_awesome_16_4);
 
+class GoouuuCamLcdDisplay : public SpiLcdDisplay {
+public:
+    GoouuuCamLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
+                  int width, int height, int offset_x, int offset_y,
+                  bool mirror_x, bool mirror_y, bool swap_xy)
+        : SpiLcdDisplay(panel_io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y, swap_xy) {}
+
+    virtual void SetupUI() override {
+        // Call the parent's SetupUI to build the standard layout
+        SpiLcdDisplay::SetupUI();
+        
+        // --- GoouuuCam Text Elevation Fix ---
+        if (content_ != nullptr) {
+            // WeChat style chat mode: add 30px safe area at the bottom
+            lv_obj_set_style_pad_bottom(content_, 30, 0); 
+        }
+        
+        if (bottom_bar_ != nullptr) {
+            // Generic mode text bar: shift the entire bar upwards by 20 pixels
+            lv_obj_align(bottom_bar_, LV_ALIGN_BOTTOM_MID, 0, -20);
+        }
+        
+        if (low_battery_popup_ != nullptr) {
+            // Also shift the low battery popup up so it doesn't overlap the new text position
+            lv_obj_align(low_battery_popup_, LV_ALIGN_BOTTOM_MID, 0, -45);
+        }
+    }
+
+    virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override {
+#if CONFIG_USE_WECHAT_MESSAGE_STYLE
+        // --- WECHAT STYLE PREVIEW (Bubbles) ---
+        DisplayLockGuard lock(this);
+        if (content_ == nullptr || image == nullptr) {
+            return;
+        }
+        
+        auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+        lv_obj_t* img_bubble = lv_obj_create(content_);
+        lv_obj_set_style_radius(img_bubble, 8, 0);
+        lv_obj_set_scrollbar_mode(img_bubble, LV_SCROLLBAR_MODE_OFF);
+        lv_obj_set_style_border_width(img_bubble, 0, 0);
+        lv_obj_set_style_pad_all(img_bubble, lvgl_theme->spacing(4), 0);
+        
+        lv_obj_set_style_bg_color(img_bubble, lvgl_theme->assistant_bubble_color(), 0);
+        lv_obj_set_style_bg_opa(img_bubble, LV_OPA_70, 0);
+        lv_obj_set_user_data(img_bubble, (void*)"image");
+
+        lv_obj_t* preview_image = lv_image_create(img_bubble);
+        
+        // Expand the image to strictly fill most of the 240x320 screen
+        lv_coord_t max_width = LV_HOR_RES * 95 / 100;
+        lv_coord_t max_height = LV_VER_RES * 65 / 100;
+        
+        auto img_dsc = image->image_dsc();
+        lv_coord_t img_width = img_dsc->header.w;
+        lv_coord_t img_height = img_dsc->header.h;
+        if (img_width == 0 || img_height == 0) {
+            img_width = max_width;
+            img_height = max_height;
+        }
+        
+        lv_coord_t zoom_w = (max_width * 256) / img_width;
+        lv_coord_t zoom_h = (max_height * 256) / img_height;
+        lv_coord_t zoom = (zoom_w < zoom_h) ? zoom_w : zoom_h;
+        if (zoom > 256) zoom = 256;
+        
+        lv_image_set_src(preview_image, img_dsc);
+        lv_image_set_scale(preview_image, zoom);
+        
+        LvglImage* raw_image = image.release();
+        lv_obj_add_event_cb(preview_image, [](lv_event_t* e) {
+            LvglImage* img = (LvglImage*)lv_event_get_user_data(e);
+            if (img != nullptr) {
+                delete img;
+            }
+        }, LV_EVENT_DELETE, (void*)raw_image);
+        
+        lv_coord_t scaled_width = (img_width * zoom) / 256;
+        lv_coord_t scaled_height = (img_height * zoom) / 256;
+        
+        lv_obj_set_width(img_bubble, scaled_width + 16);
+        lv_obj_set_height(img_bubble, scaled_height + 16);
+        lv_obj_set_style_flex_grow(img_bubble, 0, 0);
+        lv_obj_center(preview_image);
+        lv_obj_align(img_bubble, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_scroll_to_view_recursive(img_bubble, LV_ANIM_ON);
+#else
+        // --- GENERIC STYLE PREVIEW (Centered Background) ---
+        DisplayLockGuard lock(this);
+        if (preview_image_ == nullptr) {
+            ESP_LOGE(TAG, "Preview image is not initialized");
+            return;
+        }
+
+        if (image == nullptr) {
+            esp_timer_stop(preview_timer_);
+            lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+            preview_image_cached_.reset();
+            return;
+        }
+
+        preview_image_cached_ = std::move(image);
+        auto img_dsc = preview_image_cached_->image_dsc();
+        lv_image_set_src(preview_image_, img_dsc);
+
+        if (img_dsc->header.w > 0 && img_dsc->header.h > 0) {
+            lv_coord_t max_width = LV_HOR_RES * 95 / 100;
+            // Native scaling logic: 256 means 100%. 
+            // The original logic used `128 * width_ / img_dsc->header.w` (50% scale max)
+            lv_coord_t zoom = (max_width * 256) / img_dsc->header.w;
+            if (zoom > 256) zoom = 256;
+            
+            lv_image_set_scale(preview_image_, zoom);
+            
+            // Align it center, slightly elevated to stay away from bottom text
+            lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, -20);
+        }
+
+        if (gif_controller_) {
+            gif_controller_->Stop();
+        }
+        lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+        esp_timer_stop(preview_timer_);
+        ESP_ERROR_CHECK(esp_timer_start_once(preview_timer_, PREVIEW_IMAGE_DURATION_MS * 1000));
+#endif
+    }
+};
+
 class GoouuuCam : public WifiBoard {
 private:
  
     Button boot_button_;
+    Button capture_button_;
+    TaskHandle_t preview_task_ = nullptr;
+    volatile bool is_previewing_ = false;
+    uint32_t preview_start_time_ = 0;
+
     LcdDisplay* display_;
-    Esp32Camera* camera_;
+    Camera* camera_;
     PowerSaveTimer* power_save_timer_;
     PowerManager* power_manager_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
+
+    void StartPreview() {
+        if (is_previewing_) return;
+        is_previewing_ = true;
+        preview_start_time_ = esp_timer_get_time() / 1000;
+        
+        display_->SetChatMessage("system", "进入相机预览模式...");
+        
+        xTaskCreate([](void* arg) {
+            GoouuuCam* self = static_cast<GoouuuCam*>(arg);
+            while (self->is_previewing_) {
+                if (self->camera_->Capture()) {
+                    // Capture successfully updates the LCD
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(100)); // Delay on error
+                }
+                
+                // Timeout after 60 seconds
+                if ((esp_timer_get_time() / 1000) - self->preview_start_time_ > 60000) {
+                    ESP_LOGI(TAG, "Preview timeout");
+                    self->is_previewing_ = false;
+                    break;
+                }
+                
+                // Control frame rate
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            
+            self->display_->SetChatMessage("system", ""); // Clear message
+            self->preview_task_ = nullptr;
+            vTaskDelete(NULL);
+        }, "preview_task", 4096, this, 2, &preview_task_);
+    }
+
+    void StopPreview() {
+        if (is_previewing_) {
+            is_previewing_ = false;
+        }
+    }
+
+    void ExecuteCaptureAndExplain() {
+        StopPreview();
+        
+        // 延时150ms，确保后台的 is_previewing_ 循环执行完毕并释放摄像头硬件控制权
+        vTaskDelay(pdMS_TO_TICKS(150)); 
+        
+        display_->SetChatMessage("system", "正在锁定画面...");
+        
+        // 触发全局语音助手链路，让它接管后续拍照上传和播报语音的流程
+        // auto& app = Application::GetInstance();
+        // 伪造语音指令让服务器主动调用摄像头工具
+        // app.WakeWordInvoke("帮忙看下这是什么"); 
+    }
+
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
@@ -134,7 +325,7 @@ private:
             .dvp = &dvp_config,
         };
 
-        camera_ = new Esp32Camera(video_config);
+        camera_ = new EspVideo(video_config);
         camera_->SetHMirror(false);
     }
     void InitializePowerManager() {
@@ -221,7 +412,7 @@ private:
 #ifdef  LCD_TYPE_GC9A01_SERIAL
         panel_config.vendor_config = &gc9107_vendor_config;
 #endif
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = new GoouuuCamLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -236,6 +427,24 @@ private:
             }
             app.ToggleChatState();
         });
+
+        capture_button_.OnClick([this]() {
+            if (!is_previewing_) {
+                ESP_LOGI(TAG, "Button 2 pressed: Starting preview");
+                StartPreview();
+            } else {
+                ESP_LOGI(TAG, "Button 2 pressed: capture and explain");
+                ExecuteCaptureAndExplain();
+            }
+        });
+        
+        capture_button_.OnLongPress([this]() {
+            if (is_previewing_) {
+                ESP_LOGI(TAG, "Button 2 long pressed: Stopping preview");
+                StopPreview();
+                display_->SetChatMessage("system", "已退出预览模式");
+            }
+        });
     }
 
 
@@ -248,7 +457,7 @@ private:
 
     // 物联网初始化，添加对 AI 可见设备
     void InitializeTools() {
-        static LampController lamp(LAMP_GPIO);
+        // static LampController lamp(LAMP_GPIO);
 
         auto& mcp_server = McpServer::GetInstance();
         
@@ -327,7 +536,8 @@ private:
 
 public:
     GoouuuCam() :
-        boot_button_(BOOT_BUTTON_GPIO) {
+        boot_button_(BOOT_BUTTON_GPIO),
+        capture_button_(CAPTURE_BUTTON_GPIO) {
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
