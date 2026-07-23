@@ -72,8 +72,8 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
 
 #pragma message("GoouuuCam")
 
-LV_FONT_DECLARE(font_puhui_16_4);
-LV_FONT_DECLARE(font_awesome_16_4);
+// LV_FONT_DECLARE(font_puhui_16_4);
+// LV_FONT_DECLARE(font_awesome_16_4);
 
 class GoouuuCamLcdDisplay : public SpiLcdDisplay {
 public:

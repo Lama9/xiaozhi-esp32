@@ -27,7 +27,6 @@
 #include <esp_timer.h>
 #include <driver/gpio.h>
 #include <esp_adc/adc_oneshot.h>
-#include <driver/adc.h>
 
 
 #include <lwip/sockets.h>

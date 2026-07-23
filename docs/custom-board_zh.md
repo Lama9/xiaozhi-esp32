@@ -107,11 +107,13 @@ mkdir main/boards/my-custom-board
 ```
 
 **配置项说明：**
+
 - `target`: 目标芯片型号，必须与硬件匹配
 - `name`: 编译输出的固件包名称，建议与目录名一致
 - `sdkconfig_append`: 额外的 sdkconfig 配置项数组，会追加到默认配置中
 
 **常用的 sdkconfig_append 配置：**
+
 ```json
 // Flash 大小
 "CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y"   // 4MB Flash
@@ -310,6 +312,7 @@ endchoice
 ```
 
 **注意事项：**
+
 - `BOARD_TYPE_MY_CUSTOM_BOARD` 是配置项名称，需要全大写，使用下划线分隔
 - `depends on` 指定了目标芯片类型（如 `IDF_TARGET_ESP32S3`、`IDF_TARGET_ESP32C3` 等）
 - 描述文字可以使用中英文
@@ -331,12 +334,14 @@ endif()
 **字体和表情配置说明：**
 
 根据屏幕分辨率选择合适的字体大小：
+
 - 小屏幕（128x64 OLED）：`font_puhui_basic_14_1` / `font_awesome_14_1`
 - 中小屏幕（240x240）：`font_puhui_basic_16_4` / `font_awesome_16_4`
 - 中等屏幕（240x320）：`font_puhui_basic_20_4` / `font_awesome_20_4`
 - 大屏幕（480x320+）：`font_puhui_basic_30_4` / `font_awesome_30_4`
 
 表情集合选项：
+
 - `twemoji_32` - 32x32 像素表情（小屏幕）
 - `twemoji_64` - 64x64 像素表情（大屏幕）
 
@@ -345,6 +350,7 @@ endif()
 #### 方法一：使用 idf.py 手动配置
 
 1. **设置目标芯片**（首次配置或更换芯片时）：
+
    ```bash
    # 对于 ESP32-S3
    idf.py set-target esp32s3
@@ -357,18 +363,21 @@ endif()
    ```
 
 2. **清理旧配置**：
+
    ```bash
    idf.py fullclean
    ```
 
 3. **进入配置菜单**：
+
    ```bash
    idf.py menuconfig
    ```
-   
+
    在菜单中导航到：`Xiaozhi Assistant` -> `Board Type`，选择你的自定义开发板。
 
 4. **编译和烧录**：
+
    ```bash
    idf.py build
    idf.py flash monitor
@@ -383,6 +392,7 @@ python scripts/release.py my-custom-board
 ```
 
 此脚本会自动：
+
 - 读取 `config.json` 中的 `target` 配置并设置目标芯片
 - 应用 `sdkconfig_append` 中的编译选项
 - 完成编译并打包固件
@@ -391,12 +401,12 @@ python scripts/release.py my-custom-board
 
 在README.md中说明开发板的特性、硬件要求、编译和烧录步骤：
 
-
 ## 常见开发板组件
 
 ### 1. 显示屏
 
 项目支持多种显示屏驱动，包括:
+
 - ST7789 (SPI)
 - ILI9341 (SPI)
 - SH8601 (QSPI)
@@ -405,6 +415,7 @@ python scripts/release.py my-custom-board
 ### 2. 音频编解码器
 
 支持的编解码器包括:
+
 - ES8311 (常用)
 - ES7210 (麦克风阵列)
 - AW88298 (功放)
@@ -413,12 +424,14 @@ python scripts/release.py my-custom-board
 ### 3. 电源管理
 
 一些开发板使用电源管理芯片:
+
 - AXP2101
 - 其他可用的PMIC
 
 ### 4. MCP设备控制
 
 可以添加各种MCP工具，让AI能够使用:
+
 - Speaker (扬声器控制)
 - Screen (屏幕亮度调节)
 - Battery (电池电量读取)
@@ -448,6 +461,6 @@ python scripts/release.py my-custom-board
 
 ## 参考资料
 
-- ESP-IDF 文档: https://docs.espressif.com/projects/esp-idf/
-- LVGL 文档: https://docs.lvgl.io/
-- ESP-SR 文档: https://github.com/espressif/esp-sr 
+- ESP-IDF 文档: <https://docs.espressif.com/projects/esp-idf/>
+- LVGL 文档: <https://docs.lvgl.io/>
+- ESP-SR 文档: <https://github.com/espressif/esp-sr>
